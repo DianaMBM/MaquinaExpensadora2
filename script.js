@@ -8,10 +8,50 @@ document.addEventListener("DOMContentLoaded", () => {
   let categoriaActiva = "todos";
   let mapaCategoriasId = {};
 
-  const API_BASE_URL = "http://138.68.24.136:3000/api/v1";
+  // Use local PHP proxy to avoid Mixed Content / CORS issues
+  // Use relative paths so the app works from a subfolder (e.g. /MaquinaExpendedora/)
+  const API_PROXY = "api.php?endpoint="; // relative -> resolves under current document path
+  const PROXY_PHP = "proxy.php?url="; // relative proxy for images/resources
+  const API_REMOTE_BASE = "http://138.68.24.136:3000"; // used only to build proxied resource URLs
   const txtContador = document.getElementById("contadorCarrito");
   const txtTotal = document.getElementById("totalCarrito");
   const popup = document.getElementById("popupAgregado");
+
+  // Error banner element (created on demand)
+  function showErrorBanner(message) {
+    let banner = document.getElementById('errorBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'errorBanner';
+      banner.style.position = 'fixed';
+      banner.style.top = '10px';
+      banner.style.left = '50%';
+      banner.style.transform = 'translateX(-50%)';
+      banner.style.zIndex = '9999';
+      banner.style.padding = '12px 18px';
+      banner.style.background = '#f8d7da';
+      banner.style.color = '#842029';
+      banner.style.border = '1px solid #f5c2c7';
+      banner.style.borderRadius = '6px';
+      banner.style.boxShadow = '0 2px 6px rgba(0,0,0,0.08)';
+      banner.style.fontSize = '14px';
+      banner.style.maxWidth = '90%';
+      banner.style.textAlign = 'center';
+      banner.style.wordWrap = 'break-word';
+      document.body.appendChild(banner);
+    }
+    banner.textContent = message;
+  }
+
+  // Quick runtime checks and debug hints
+  console.log('Script started — protocol:', location.protocol, 'API_PROXY=', API_PROXY);
+
+  // If the page is opened via file:// the browser will block fetch to /api.php
+  if (location.protocol === 'file:') {
+    showErrorBanner('La página se está abriendo desde el sistema de archivos (file://). Debes servirla por HTTP/HTTPS para que las llamadas a `api.php` funcionen. Ejecuta en la carpeta del proyecto: `php -S 0.0.0.0:8000 -t .` y abre http://localhost:8000/Index.html, o sube los archivos al servidor.');
+    console.warn('Detected file:// protocol — fetch to /api.php will fail. Serve the project over http/https.');
+    return;
+  }
 
   const modalDetalle = document.getElementById("modalDetalleProducto");
   const modalCarrito = document.getElementById("modalCarrito");
@@ -34,8 +74,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function cargarProductosAPI() {
     try {
-      const response = await fetch(`${API_BASE_URL}/productos`);
+      const response = await fetch(`${API_PROXY}productos`);
       if (!response.ok) {
+        console.warn('API proxy returned non-ok status for productos:', response.status);
+        // If server returned 502 Bad Gateway, try fallback to local static file
+        if (response.status === 502) {
+          showErrorBanner('El proxy no puede alcanzar la API remota. Intentando fallback con `productos.json` si existe.');
+          try {
+            const fallback = await fetch('productos.json');
+            if (fallback.ok) {
+              const data = await fallback.json();
+              productosAPI = Array.isArray(data) ? data : (data.data || data.productos || []);
+              await cargarCategoriasAPI();
+              rellenarCards();
+              return;
+            }
+          } catch (e) {
+            console.error('Fallback productos.json failed:', e);
+          }
+        }
         throw new Error(`Error HTTP: ${response.status} ${response.statusText}`);
       }
       const data = await response.json();
@@ -43,14 +100,32 @@ document.addEventListener("DOMContentLoaded", () => {
       await cargarCategoriasAPI();
       rellenarCards();
     } catch (error) {
-      // Error loading products
+      console.error('Error cargando productos desde proxy:', error);
+      showErrorBanner('Error cargando productos. Si el proxy no puede acceder al API remoto. Arregla la conectividad. (' + (error.message || error) + ')');
     }
   }
 
   async function cargarCategoriasAPI() {
     try {
-      const response = await fetch(`${API_BASE_URL}/categorias`);
+      const response = await fetch(`${API_PROXY}categorias`);
       if (!response.ok) {
+        console.warn('API proxy returned non-ok status for categorias:', response.status);
+        if (response.status === 502) {
+          showErrorBanner('El proxy no puede alcanzar la API remota. Intentando fallback con `categorias.json` si existe.');
+          try {
+            const fallback = await fetch('categorias.json');
+            if (fallback.ok) {
+              const data = await fallback.json();
+              categoriasAPI = Array.isArray(data) ? data : (data.data || data.categorias || []);
+              categoriasAPI.forEach(cat => {
+                mapaCategoriasId[cat.id] = cat.nombre.toLowerCase().trim();
+              });
+              return;
+            }
+          } catch (e) {
+            console.error('Fallback categorias.json failed:', e);
+          }
+        }
         throw new Error(`Error HTTP: ${response.status} ${response.statusText}`);
       }
       const data = await response.json();
@@ -59,7 +134,8 @@ document.addEventListener("DOMContentLoaded", () => {
         mapaCategoriasId[cat.id] = cat.nombre.toLowerCase().trim();
       });
     } catch (error) {
-      // Error loading categories
+      console.error('Error cargando categorias desde proxy:', error);
+      showErrorBanner('Error cargando categorías. Si el proxy no puede acceder al API remoto. Arregla la conectividad. (' + (error.message || error) + ')');
     }
   }
 
@@ -84,12 +160,15 @@ document.addEventListener("DOMContentLoaded", () => {
       imagen.className = "card-img-top";
       
       let imagenUrl = producto.imageUrl || producto.imagen;
-      if (imagenUrl && !imagenUrl.startsWith("http")) {
-        imagenUrl = `${API_BASE_URL}${imagenUrl.startsWith("/") ? "" : "/"}${imagenUrl}`;
-      }
-      
       if (imagenUrl) {
-        imagen.setAttribute("src", imagenUrl);
+        // If the image URL is already absolute (http/https), proxy it via proxy.php
+        if (/^https?:\/\//i.test(imagenUrl)) {
+          imagen.setAttribute("src", `${PROXY_PHP}${encodeURIComponent(imagenUrl)}`);
+        } else {
+          // Otherwise build absolute URL against the remote API host and proxy it
+          const remotePath = imagenUrl.startsWith("/") ? (API_REMOTE_BASE + imagenUrl) : (API_REMOTE_BASE + "/" + imagenUrl);
+          imagen.setAttribute("src", `${PROXY_PHP}${encodeURIComponent(remotePath)}`);
+        }
       }
       imagen.setAttribute("alt", producto.nombre || "Producto");
       
