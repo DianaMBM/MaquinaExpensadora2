@@ -3,8 +3,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let carrito = []; 
   let total = 0;
+  let productosAPI = [];
+  let categoriasAPI = [];
+  let categoriaActiva = "todos";
+  let mapaCategoriasId = {};
 
-  const precioProducto = 10.0;
+  const API_BASE_URL = "http://138.68.24.136:3000/api/v1";
   const txtContador = document.getElementById("contadorCarrito");
   const txtTotal = document.getElementById("totalCarrito");
   const popup = document.getElementById("popupAgregado");
@@ -12,6 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const modalDetalle = document.getElementById("modalDetalleProducto");
   const modalCarrito = document.getElementById("modalCarrito");
   const modalPago = document.getElementById("modalPago");
+  const modalCarritoVacio = document.getElementById("modalCarritoVacio");
 
   const listaCarrito = document.getElementById("listaCarrito");
   const listaPago = document.getElementById("listaPago");
@@ -25,71 +30,187 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnCerrarCarrito = document.getElementById("cerrarCarrito");
   const btnPagar = document.getElementById("btnPagar");
   const btnCerrarPago = document.getElementById("cerrarPago");
+  const btnCerrarModalCarritoVacio = document.getElementById("cerrarModalCarritoVacio");
 
-  // Función para cerrar todos los modales
+  async function cargarProductosAPI() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/productos`);
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status} ${response.statusText}`);
+      }
+      const data = await response.json();
+      productosAPI = Array.isArray(data) ? data : (data.data || data.productos || []);
+      await cargarCategoriasAPI();
+      rellenarCards();
+    } catch (error) {
+      // Error loading products
+    }
+  }
+
+  async function cargarCategoriasAPI() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/categorias`);
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status} ${response.statusText}`);
+      }
+      const data = await response.json();
+      categoriasAPI = Array.isArray(data) ? data : (data.data || data.categorias || []);
+      categoriasAPI.forEach(cat => {
+        mapaCategoriasId[cat.id] = cat.nombre.toLowerCase().trim();
+      });
+    } catch (error) {
+      // Error loading categories
+    }
+  }
+
+  function rellenarCards() {
+    const cardsGrid = document.querySelector(".cards-grid");
+    let productosFiltrados = productosAPI;
+    
+    if (categoriaActiva !== "todos") {
+      productosFiltrados = productosAPI.filter(producto => {
+        const categoriaNombre = mapaCategoriasId[producto.categoriaId] || "";
+        return categoriaNombre === categoriaActiva;
+      });
+    }
+
+    cardsGrid.innerHTML = "";
+
+    productosFiltrados.forEach((producto) => {
+      const card = document.createElement("div");
+      card.className = "card Card-Product-Preview";
+      
+      const imagen = document.createElement("img");
+      imagen.className = "card-img-top";
+      
+      let imagenUrl = producto.imageUrl || producto.imagen;
+      if (imagenUrl && !imagenUrl.startsWith("http")) {
+        imagenUrl = `${API_BASE_URL}${imagenUrl.startsWith("/") ? "" : "/"}${imagenUrl}`;
+      }
+      
+      if (imagenUrl) {
+        imagen.setAttribute("src", imagenUrl);
+      }
+      imagen.setAttribute("alt", producto.nombre || "Producto");
+      
+      const cardBody = document.createElement("div");
+      cardBody.className = "card-body text-center";
+      
+      const precio = document.createElement("h5");
+      precio.className = "precio";
+      precio.textContent = `Q ${producto.precio.toFixed(2)}`;
+      
+      const descripcion = document.createElement("p");
+      descripcion.className = "nombre-producto";
+      descripcion.textContent = producto.descripcionCorta || producto.nombre;
+      
+      const btn = document.createElement("button");
+      btn.className = "btn btn-dark rounded-pill px-4 py-2";
+      btn.textContent = "Añadir";
+      
+      cardBody.appendChild(precio);
+      cardBody.appendChild(descripcion);
+      cardBody.appendChild(btn);
+      
+      card.appendChild(imagen);
+      card.appendChild(cardBody);
+      
+      cardsGrid.appendChild(card);
+      
+      card.dataset.productId = producto.id;
+      card.dataset.productoOriginal = JSON.stringify(producto);
+    });
+    
+    agregarEventListenersCards();
+  }
+
+  function agregarEventListenersCards() {
+    document.querySelectorAll(".Card-Product-Preview").forEach(card => {
+      card.replaceWith(card.cloneNode(true));
+    });
+
+    document.querySelectorAll(".Card-Product-Preview").forEach(card => {
+      const btn = card.querySelector(".btn-dark");
+      
+      if (btn) {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+
+          const nombre = card.querySelector(".nombre-producto").textContent;
+          const imagen = card.querySelector("img").src;
+          const precioText = card.querySelector(".precio").textContent.replace("Q ", "").trim();
+          const precio = parseFloat(precioText);
+          const productoCompleto = card.dataset.productoOriginal ? JSON.parse(card.dataset.productoOriginal) : null;
+
+          agregarProducto(nombre, precio, imagen, productoCompleto);
+        });
+      }
+
+      card.addEventListener("click", (e) => {
+        if (e.target.closest(".btn-dark")) {
+          return;
+        }
+
+        modalDetalle.querySelector("#modalNombre").textContent =
+          card.querySelector(".nombre-producto").textContent;
+
+        modalDetalle.querySelector("#modalPrecio").textContent =
+          card.querySelector(".precio").textContent;
+
+        modalDetalle.querySelector("#modalImagen").src =
+          card.querySelector("img").src;
+
+        const productoCompleto = card.dataset.productoOriginal ? JSON.parse(card.dataset.productoOriginal) : null;
+        const descripcion = productoCompleto?.descripcionLarga || productoCompleto?.descripcionCorta || "Este es un delicioso producto de alta calidad, ideal para disfrutar en cualquier momento del día.";
+
+        modalDetalle.querySelector("#modalDescripcion").textContent = descripcion;
+
+        modalDetalle.classList.add("mostrar");
+      });
+    });
+  }
+
   function cerrarTodosLosModales() {
     modalDetalle.classList.remove("mostrar");
     modalCarrito.classList.remove("mostrar");
     modalPago.classList.remove("mostrar");
+    modalCarritoVacio.classList.remove("mostrar");
   }
 
-  // Mostrar popup cuando agrega un producto
+  function validarCarritoNoVacio() {
+    if (carrito.length === 0) {
+      cerrarTodosLosModales();
+      modalCarritoVacio.classList.add("mostrar");
+      return false;
+    }
+    return true;
+  }
+
+  cargarProductosAPI();
+
   function mostrarPopup() {
     popup.classList.add("popup-show");
     setTimeout(() => popup.classList.remove("popup-show"), 1800);
   }
 
-  // Actualiza contador de productos y total
   function actualizarTotales() {
     txtContador.textContent = carrito.length;
     txtTotal.textContent = `Q${total.toFixed(2)}`;
   }
 
-  // Agregar producto como tarjeta nueva (NO agrupar cantidades)
-  function agregarProducto(nombre, precio, imagen) {
+  function agregarProducto(nombre, precio, imagen, productoCompleto = null) {
     carrito.push({
       nombre,
       precio,
-      imagen
+      imagen,
+      ...productoCompleto
     });
 
     total += precio;
     actualizarTotales();
     mostrarPopup();
   }
-
-  // Añadir desde las tarjetas principales
-  document.querySelectorAll(".Card-Product-Preview .btn-dark").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-
-      const card = e.target.closest(".Card-Product-Preview");
-      const nombre = card.querySelector(".nombre-producto").textContent;
-      const imagen = card.querySelector("img").src;
-
-      agregarProducto(nombre, precioProducto, imagen);
-    });
-  });
-
-  // Abrir modal detalle producto
-  document.querySelectorAll(".Card-Product-Preview").forEach(card => {
-    card.addEventListener("click", () => {
-
-      modalDetalle.querySelector("#modalNombre").textContent =
-        card.querySelector(".nombre-producto").textContent;
-
-      modalDetalle.querySelector("#modalPrecio").textContent =
-        card.querySelector(".precio").textContent;
-
-      modalDetalle.querySelector("#modalImagen").src =
-        card.querySelector("img").src;
-
-      modalDetalle.querySelector("#modalDescripcion").textContent =
-        "Este es un delicioso producto de alta calidad, ideal para disfrutar en cualquier momento del día.";
-
-      modalDetalle.classList.add("mostrar");
-    });
-  });
 
   btnCerrarModal.addEventListener("click", () => {
     modalDetalle.classList.remove("mostrar");
@@ -98,12 +219,13 @@ document.addEventListener("DOMContentLoaded", () => {
   btnAgregarModal.addEventListener("click", () => {
     const nombre = document.getElementById("modalNombre").textContent;
     const imagen = document.getElementById("modalImagen").src;
+    const precioText = document.getElementById("modalPrecio").textContent.replace("Q ", "").trim();
+    const precio = parseFloat(precioText);
 
-    agregarProducto(nombre, precioProducto, imagen);
+    agregarProducto(nombre, precio, imagen);
     modalDetalle.classList.remove("mostrar");
   });
 
-  // Renderizar carrito
   function renderizarCarrito() {
     listaCarrito.innerHTML = "";
 
@@ -160,7 +282,6 @@ document.addEventListener("DOMContentLoaded", () => {
     renderizarCarrito();
   });
 
-  // Modal Pago (misma estética que carrito)
   function renderizarPago() {
     listaPago.innerHTML = "";
 
@@ -185,6 +306,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   btnPagar.addEventListener("click", () => {
+    if (!validarCarritoNoVacio()) return;
     cerrarTodosLosModales();
     renderizarPago();
     modalPago.classList.add("mostrar");
@@ -194,7 +316,10 @@ document.addEventListener("DOMContentLoaded", () => {
     modalPago.classList.remove("mostrar");
   });
 
-  // POS
+  btnCerrarModalCarritoVacio.addEventListener("click", () => {
+    modalCarritoVacio.classList.remove("mostrar");
+  });
+
   const modalPOS = document.getElementById("modalPOS");
   const btnPagarTarjetaList = document.querySelectorAll("#btnPagarTarjeta, #btnPagarCarritoTarjeta");
   const cerrarPOS = document.getElementById("cerrarPOS");
@@ -210,7 +335,6 @@ document.addEventListener("DOMContentLoaded", () => {
     modalPOS.classList.remove("mostrar");
   });
 
-  // QR
   const modalQR = document.getElementById("modalQR");
   const btnPagarQRList = document.querySelectorAll("#btnPagarQR, #btnPagarCarritoQR");
   const cerrarQR = document.getElementById("cerrarQR");
@@ -223,47 +347,48 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   cerrarQR.addEventListener("click", () => {
-    cerrarQR();
+    modalQR.classList.remove("mostrar");
+  });
+
+  document.querySelectorAll("#continuarPagoCarrito, #modalCarrito .btn-pago-qr").forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (!validarCarritoNoVacio()) return;
+      cerrarTodosLosModales();
+      renderizarPago();
+      modalPago.classList.add("mostrar");
+    });
+  });
+
+  document.querySelectorAll(".btn-categoria").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".btn-categoria").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      
+      const textoBotón = btn.textContent.trim().toLowerCase();
+      let categoriaEncontrada = null;
+      
+      if (textoBotón.includes("todos")) {
+        categoriaActiva = "todos";
+      } else {
+        for (let id in mapaCategoriasId) {
+          const nombreCategoria = mapaCategoriasId[id];
+          const nombreLimpio = nombreCategoria.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          const textoBtnLimpio = textoBotón.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          
+          if (nombreLimpio.includes(textoBtnLimpio) || textoBtnLimpio.includes(nombreLimpio)) {
+            categoriaActiva = nombreCategoria;
+            categoriaEncontrada = true;
+            break;
+          }
+        }
+      }
+      
+      rellenarCards();
+    });
   });
 });
 
 
-// POS
-const modalPOS = document.getElementById("modalPOS");
-const cerrarPOS = document.getElementById("cerrarPOS");
 
-// QR
-const modalQR = document.getElementById("modalQR");
-const cerrarQR = document.getElementById("cerrarQR");
 
-// Abrir POS desde carrito y pago
-document.querySelectorAll("#continuarPagoCarrito, #btnPagarTarjeta").forEach(btn => {
-  btn.addEventListener("click", () => {
-    modalPOS.classList.add("mostrar");
-  });
-});
 
-// Abrir QR desde carrito y pago
-document.querySelectorAll(".btn-pago-qr, #btnPagarQR").forEach(btn => {
-  btn.addEventListener("click", () => {
-    modalQR.classList.add("mostrar");
-  });
-});
-
-// Cerrar POS
-cerrarPOS.addEventListener("click", () => {
-  modalPOS.classList.remove("mostrar");
-});
-
-// Cerrar QR
-cerrarQR.addEventListener("click", () => {
-  modalQR.classList.remove("mostrar");
-});
-
-// Activar categoría seleccionada
-document.querySelectorAll(".btn-categoria").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".btn-categoria").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-  });
-});
